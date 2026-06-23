@@ -34,7 +34,7 @@
 
 @push('scripts')
 <script>
-$(function() {
+$(document).ready(function() {
     $('#purchase-orders-table').DataTable({
         processing: true,
         serverSide: true,
@@ -49,7 +49,8 @@ $(function() {
             { data: 'action', name: 'action', orderable: false, searchable: false }
         ],
         pageLength: 10,
-        responsive: true
+        responsive: true,
+        order: [[5, 'desc']]
     });
 });
 </script>

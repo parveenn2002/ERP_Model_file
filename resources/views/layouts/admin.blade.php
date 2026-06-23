@@ -189,13 +189,16 @@
                     </a>
                     @endcan
                     
-                    @can('reports.view')
-                    <a href="#" class="nav-link">
-                        <i class="fas fa-chart-bar"></i> Reports
-                    </a>
-                    @endcan
+                   <!-- Add this in the sidebar navigation -->
+@can('reports.view')
+<a href="{{ route('admin.reports.index') }}" class="nav-link {{ request()->routeIs('admin.reports.*') ? 'active' : '' }}">
+    <i class="fas fa-chart-bar"></i> Reports
+</a>
+@endcan
                 </nav>
             </div>
+
+
             
             <!-- Main Content -->
             <div class="col-md-10 p-3">
@@ -239,6 +242,8 @@
                         </div>
                     </div>
                 </nav>
+
+                
                 
                 <!-- Content -->
                 <div class="content">
