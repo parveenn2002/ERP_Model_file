@@ -27,15 +27,15 @@ class RolesAndPermissionsSeeder extends Seeder
         ];
 
         foreach ($permissions as $permission) {
-            Permission::create(['name' => $permission]);
+            Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
         }
 
-        // Create roles and assign permissions
-        $admin = Role::create(['name' => 'Admin']);
-        $admin->givePermissionTo(Permission::all());
+        // Create roles
+        $admin = Role::firstOrCreate(['name' => 'Admin', 'guard_name' => 'web']);
+        $admin->syncPermissions(Permission::all());
 
-        $manager = Role::create(['name' => 'Manager']);
-        $manager->givePermissionTo([
+        $manager = Role::firstOrCreate(['name' => 'Manager', 'guard_name' => 'web']);
+        $manager->syncPermissions([
             'products.view', 'products.manage',
             'suppliers.manage',
             'warehouses.manage',
@@ -46,16 +46,16 @@ class RolesAndPermissionsSeeder extends Seeder
             'reports.view',
         ]);
 
-        $procurement = Role::create(['name' => 'Procurement']);
-        $procurement->givePermissionTo([
+        $procurement = Role::firstOrCreate(['name' => 'Procurement', 'guard_name' => 'web']);
+        $procurement->syncPermissions([
             'products.view',
             'suppliers.manage',
             'purchase_orders.create', 'purchase_orders.submit',
             'reports.view',
         ]);
 
-        $warehouse = Role::create(['name' => 'Warehouse']);
-        $warehouse->givePermissionTo([
+        $warehouse = Role::firstOrCreate(['name' => 'Warehouse', 'guard_name' => 'web']);
+        $warehouse->syncPermissions([
             'products.view',
             'warehouses.manage',
             'purchase_orders.review',
@@ -63,13 +63,13 @@ class RolesAndPermissionsSeeder extends Seeder
             'reports.view',
         ]);
 
-        $viewer = Role::create(['name' => 'Viewer']);
-        $viewer->givePermissionTo([
+        $viewer = Role::firstOrCreate(['name' => 'Viewer', 'guard_name' => 'web']);
+        $viewer->syncPermissions([
             'products.view',
             'reports.view',
         ]);
 
-        // Create users with explicit email case
+        // Create users with exact credentials
         $users = [
             [
                 'name' => 'Admin User',
@@ -104,12 +104,17 @@ class RolesAndPermissionsSeeder extends Seeder
         ];
 
         foreach ($users as $userData) {
-            $user = User::create([
-                'name' => $userData['name'],
-                'email' => strtolower($userData['email']), // Ensure lowercase
-                'password' => Hash::make($userData['password']),
-            ]);
-            $user->assignRole($userData['role']);
+            $user = User::updateOrCreate(
+                ['email' => $userData['email']],
+                [
+                    'name' => $userData['name'],
+                    'password' => Hash::make($userData['password']),
+                    'email_verified_at' => now(),
+                ]
+            );
+            $user->syncRoles([$userData['role']]);
+            
+            echo "✅ User created: " . $userData['email'] . " / " . $userData['password'] . " (Role: " . $userData['role'] . ")\n";
         }
     }
 }
