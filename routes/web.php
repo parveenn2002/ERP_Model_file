@@ -7,6 +7,7 @@ use App\Http\Controllers\Admin\SupplierController;
 use App\Http\Controllers\Admin\WarehouseController;
 use App\Http\Controllers\Admin\PurchaseOrderController;
 use App\Http\Controllers\Admin\StockController;
+use App\Http\Controllers\Admin\ReportController;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -15,7 +16,7 @@ Route::get('/', function () {
     return redirect('/login');
 });
 
-// Simple Login Routes
+// Login Routes
 Route::get('/login', function () {
     return view('auth.login');
 })->name('login');
@@ -43,20 +44,20 @@ Route::post('/logout', function (Request $request) {
     return redirect('/login');
 })->name('logout');
 
-// Admin Routes - Protected by auth middleware
+// Admin Routes
 Route::middleware(['auth'])->prefix('admin')->name('admin.')->group(function () {
     Route::get('/', [DashboardController::class, 'index'])->name('dashboard');
     
-    // Categories - Only users with products.manage permission
+    // Categories
     Route::resource('categories', CategoryController::class)->except(['show']);
     
-    // Products - Only users with products.view and products.manage permissions
+    // Products
     Route::resource('products', ProductController::class)->except(['show']);
     
-    // Suppliers - Only users with suppliers.manage permission
+    // Suppliers
     Route::resource('suppliers', SupplierController::class)->except(['show']);
     
-    // Warehouses - Only users with warehouses.manage permission
+    // Warehouses
     Route::resource('warehouses', WarehouseController::class)->except(['show']);
     
     // Purchase Orders
@@ -74,4 +75,12 @@ Route::middleware(['auth'])->prefix('admin')->name('admin.')->group(function () 
     Route::get('stock', [StockController::class, 'index'])->name('stock.index');
     Route::get('stock/adjust', [StockController::class, 'adjust'])->name('stock.adjust');
     Route::post('stock/adjust', [StockController::class, 'adjustStore'])->name('stock.adjust.store');
+    
+    // Report Routes - Using can middleware instead of permission
+    Route::prefix('reports')->name('reports.')->group(function () {
+        Route::get('/', [ReportController::class, 'index'])->name('index');
+        Route::get('inventory', [ReportController::class, 'inventory'])->name('inventory');
+        Route::get('purchase-orders', [ReportController::class, 'purchaseOrders'])->name('purchase-orders');
+        Route::get('stock-movements', [ReportController::class, 'stockMovements'])->name('stock-movements');
+    });
 });

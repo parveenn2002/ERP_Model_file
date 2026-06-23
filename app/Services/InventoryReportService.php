@@ -6,7 +6,6 @@ use App\Models\PurchaseOrder;
 use App\Models\Product;
 use App\Models\Warehouse;
 use App\Enums\PurchaseOrderStatus;
-use Illuminate\Support\Facades\DB;
 
 class InventoryReportService
 {
@@ -58,5 +57,10 @@ class InventoryReportService
                     'summary' => $summary,
                 ];
             });
+    }
+
+    public function getTotalStockValue()
+    {
+        return app(StockService::class)->getTotalStockValue();
     }
 }

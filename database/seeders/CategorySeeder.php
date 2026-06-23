@@ -16,6 +16,9 @@ class CategorySeeder extends Seeder
             ['name' => 'Furniture', 'description' => 'Home and office furniture'],
             ['name' => 'Food & Beverages', 'description' => 'Food products and beverages'],
             ['name' => 'Office Supplies', 'description' => 'Office stationery and supplies'],
+            ['name' => 'Books & Stationery', 'description' => 'Books, notebooks, and stationery items'],
+            ['name' => 'Health & Beauty', 'description' => 'Health care and beauty products'],
+            ['name' => 'Sports & Outdoors', 'description' => 'Sports equipment and outdoor gear'],
         ];
 
         foreach ($categories as $category) {
@@ -25,6 +28,7 @@ class CategorySeeder extends Seeder
                 'description' => $category['description'],
                 'is_active' => true,
             ]);
+            echo "✅ Category created: " . $category['name'] . "\n";
         }
     }
 }
