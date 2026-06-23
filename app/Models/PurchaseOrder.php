@@ -28,6 +28,7 @@ class PurchaseOrder extends Model
         'received_at' => 'datetime'
     ];
 
+    // Relationships
     public function supplier()
     {
         return $this->belongsTo(Supplier::class);
@@ -58,6 +59,7 @@ class PurchaseOrder extends Model
         return $this->belongsTo(User::class, 'received_by');
     }
 
+    // Scopes
     public function scopePending($query)
     {
         return $query->whereIn('status', [
@@ -71,31 +73,100 @@ class PurchaseOrder extends Model
         return $query->where('status', PurchaseOrderStatus::DRAFT);
     }
 
-    public function isEditable()
+    // Status Check Methods
+    public function isDraft(): bool
     {
         return $this->status === PurchaseOrderStatus::DRAFT;
     }
 
-    public function canBeSubmitted()
-    {
-        return $this->status === PurchaseOrderStatus::DRAFT;
-    }
-
-    public function canBeApproved()
+    public function isSubmitted(): bool
     {
         return $this->status === PurchaseOrderStatus::SUBMITTED;
     }
 
-    public function canBeReceived()
+    public function isApproved(): bool
     {
         return $this->status === PurchaseOrderStatus::APPROVED;
     }
 
-    public function canBeCancelled()
+    public function isReceived(): bool
     {
-        return !in_array($this->status, [
-            PurchaseOrderStatus::RECEIVED,
-            PurchaseOrderStatus::CANCELLED
-        ]);
+        return $this->status === PurchaseOrderStatus::RECEIVED;
+    }
+
+    public function isCancelled(): bool
+    {
+        return $this->status === PurchaseOrderStatus::CANCELLED;
+    }
+
+    // Workflow Action Methods
+    public function isEditable(): bool
+    {
+        return $this->isDraft();
+    }
+
+    public function canBeEdited(): bool
+    {
+        return $this->isDraft();
+    }
+
+    public function canBeSubmitted(): bool
+    {
+        return $this->isDraft();
+    }
+
+    public function canBeApproved(): bool
+    {
+        return $this->isSubmitted();
+    }
+
+    public function canBeReceived(): bool
+    {
+        return $this->isApproved();
+    }
+
+    public function canBeCancelled(): bool
+    {
+        return !$this->isReceived() && !$this->isCancelled();
+    }
+
+    // Transition Methods
+    public function markAsSubmitted(): void
+    {
+        $this->status = PurchaseOrderStatus::SUBMITTED;
+        $this->save();
+    }
+
+    public function markAsApproved(int $userId): void
+    {
+        $this->status = PurchaseOrderStatus::APPROVED;
+        $this->approved_by = $userId;
+        $this->approved_at = now();
+        $this->save();
+    }
+
+    public function markAsReceived(int $userId): void
+    {
+        $this->status = PurchaseOrderStatus::RECEIVED;
+        $this->received_by = $userId;
+        $this->received_at = now();
+        $this->save();
+    }
+
+    public function markAsCancelled(): void
+    {
+        $this->status = PurchaseOrderStatus::CANCELLED;
+        $this->save();
+    }
+
+    // Helper methods
+    public function getStatusLabel(): string
+    {
+        return $this->status->label();
+    }
+
+    public function getStatusBadgeColor(): string
+    {
+        return $this->status->badgeColor();
     }
 }

@@ -9,14 +9,14 @@ use App\Models\WarehouseStock;
 use App\Enums\PurchaseOrderStatus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Log;
 
 class PurchaseOrderService
 {
     public function create(array $data): PurchaseOrder
     {
         return DB::transaction(function () use ($data) {
-            $po = PurchaseOrder::create([
+            $purchaseOrder = PurchaseOrder::create([
                 'po_number' => $this->generatePONumber(),
                 'supplier_id' => $data['supplier_id'],
                 'warehouse_id' => $data['warehouse_id'],
@@ -30,20 +30,21 @@ class PurchaseOrderService
                 'grand_total' => 0,
             ]);
 
-            $this->updateItems($po, $data['items']);
-
-            return $po;
+            $this->updateItems($purchaseOrder, $data['items']);
+            $this->logActivity($purchaseOrder, 'Purchase order created in draft status');
+            
+            return $purchaseOrder;
         });
     }
 
-    public function update(PurchaseOrder $po, array $data): PurchaseOrder
+    public function update(PurchaseOrder $purchaseOrder, array $data): PurchaseOrder
     {
-        if (!$po->isEditable()) {
+        if (!$purchaseOrder->canBeEdited()) {
             throw new \Exception('Only draft purchase orders can be edited.');
         }
 
-        return DB::transaction(function () use ($po, $data) {
-            $po->update([
+        return DB::transaction(function () use ($purchaseOrder, $data) {
+            $purchaseOrder->update([
                 'supplier_id' => $data['supplier_id'],
                 'warehouse_id' => $data['warehouse_id'],
                 'order_date' => $data['order_date'],
@@ -51,24 +52,21 @@ class PurchaseOrderService
                 'notes' => $data['notes'] ?? null,
             ]);
 
-            // Delete existing items
-            $po->items()->delete();
-
-            $this->updateItems($po, $data['items']);
-
-            return $po;
+            $purchaseOrder->items()->delete();
+            $this->updateItems($purchaseOrder, $data['items']);
+            $this->logActivity($purchaseOrder, 'Purchase order updated');
+            
+            return $purchaseOrder;
         });
     }
 
-    private function updateItems(PurchaseOrder $po, array $items)
+    private function updateItems(PurchaseOrder $purchaseOrder, array $items)
     {
         $subtotal = 0;
-
         foreach ($items as $item) {
             $lineTotal = $item['quantity'] * $item['unit_price'];
             $subtotal += $lineTotal;
-
-            $po->items()->create([
+            $purchaseOrder->items()->create([
                 'product_id' => $item['product_id'],
                 'quantity' => $item['quantity'],
                 'unit_price' => $item['unit_price'],
@@ -76,97 +74,71 @@ class PurchaseOrderService
             ]);
         }
 
-        $taxAmount = $subtotal * 0.05; // 5% tax
+        $taxAmount = $subtotal * 0.05;
         $grandTotal = $subtotal + $taxAmount;
 
-        $po->update([
+        $purchaseOrder->update([
             'subtotal' => $subtotal,
             'tax_amount' => $taxAmount,
             'grand_total' => $grandTotal,
         ]);
     }
 
-
-    public function submit(PurchaseOrder $po): PurchaseOrder
+    public function submit(PurchaseOrder $purchaseOrder): PurchaseOrder
     {
-        if (!$po->canBeSubmitted()) {
+        if (!$purchaseOrder->canBeSubmitted()) {
             throw new \Exception('Only draft purchase orders can be submitted.');
         }
-        $po->update(['status' => PurchaseOrderStatus::SUBMITTED]);
+
+        $purchaseOrder->markAsSubmitted();
+        $this->logActivity($purchaseOrder, 'Purchase order submitted for approval');
         
-        try {
-            activity()->performedOn($po)->causedBy(Auth::user())->log('Purchase order submitted');
-        } catch (\Exception $e) {
-            \Log::warning('Activity log not available: ' . $e->getMessage());
-        }
-        
-        return $po;
+        return $purchaseOrder;
     }
 
-    public function approve(PurchaseOrder $po): PurchaseOrder
+    public function approve(PurchaseOrder $purchaseOrder): PurchaseOrder
     {
-        if (!$po->canBeApproved()) {
+        if (!$purchaseOrder->canBeApproved()) {
             throw new \Exception('Only submitted purchase orders can be approved.');
         }
-        $po->update([
-            'status' => PurchaseOrderStatus::APPROVED,
-            'approved_by' => Auth::id(),
-            'approved_at' => now(),
-        ]);
+
+        $purchaseOrder->markAsApproved(Auth::id());
+        $this->logActivity($purchaseOrder, 'Purchase order approved by ' . Auth::user()->name);
         
-        try {
-            activity()->performedOn($po)->causedBy(Auth::user())->log('Purchase order approved');
-        } catch (\Exception $e) {
-            \Log::warning('Activity log not available: ' . $e->getMessage());
-        }
-        
-        return $po;
+        return $purchaseOrder;
     }
 
-    public function receive(PurchaseOrder $po): PurchaseOrder
+    public function receive(PurchaseOrder $purchaseOrder): PurchaseOrder
     {
-        if (!$po->canBeReceived()) {
+        if (!$purchaseOrder->canBeReceived()) {
             throw new \Exception('Only approved purchase orders can be received.');
         }
 
-        return DB::transaction(function () use ($po) {
-            foreach ($po->items as $item) {
-                $this->updateStock($item->product_id, $po->warehouse_id, $item->quantity, $po);
+        return DB::transaction(function () use ($purchaseOrder) {
+            foreach ($purchaseOrder->items as $item) {
+                $this->updateStock($item->product_id, $purchaseOrder->warehouse_id, $item->quantity, $purchaseOrder);
             }
 
-            $po->update([
-                'status' => PurchaseOrderStatus::RECEIVED,
-                'received_by' => Auth::id(),
-                'received_at' => now(),
-            ]);
-
-            try {
-                activity()->performedOn($po)->causedBy(Auth::user())->log('Purchase order received');
-            } catch (\Exception $e) {
-                \Log::warning('Activity log not available: ' . $e->getMessage());
-            }
+            $purchaseOrder->markAsReceived(Auth::id());
+            $this->logActivity($purchaseOrder, 'Purchase order received and stock updated by ' . Auth::user()->name);
             
-            return $po;
+            return $purchaseOrder;
         });
     }
 
-    public function cancel(PurchaseOrder $po): PurchaseOrder
+    public function cancel(PurchaseOrder $purchaseOrder): PurchaseOrder
     {
-        if (!$po->canBeCancelled()) {
-            throw new \Exception('This purchase order cannot be cancelled.');
+        if (!$purchaseOrder->canBeCancelled()) {
+            throw new \Exception('This purchase order cannot be cancelled. Only draft, submitted, or approved orders can be cancelled.');
         }
-        $po->update(['status' => PurchaseOrderStatus::CANCELLED]);
+
+        $purchaseOrder->markAsCancelled();
+        $this->logActivity($purchaseOrder, 'Purchase order cancelled by ' . Auth::user()->name);
         
-        try {
-            activity()->performedOn($po)->causedBy(Auth::user())->log('Purchase order cancelled');
-        } catch (\Exception $e) {
-            \Log::warning('Activity log not available: ' . $e->getMessage());
-        }
-        
-        return $po;
+        return $purchaseOrder;
     }
 
-    private function updateStock($productId, $warehouseId, $quantity)
+    private function updateStock($productId, $warehouseId, $quantity, $purchaseOrder)
     {
         $stock = WarehouseStock::where([
             'product_id' => $productId,
@@ -192,8 +164,8 @@ class PurchaseOrderService
             'quantity' => $quantity,
             'balance_after' => $newBalance,
             'reference_type' => PurchaseOrder::class,
-            'reference_id' => $po->id,
-            'notes' => 'Received from purchase order ' . $po->po_number,
+            'reference_id' => $purchaseOrder->id,
+            'notes' => 'Received from purchase order ' . $purchaseOrder->po_number,
             'created_by' => Auth::id(),
         ]);
     }
@@ -211,7 +183,24 @@ class PurchaseOrderService
         } else {
             $sequence = '0001';
         }
-
         return 'PO-' . $year . '-' . $sequence;
+    }
+
+    private function logActivity($purchaseOrder, string $description): void
+    {
+        try {
+            if (class_exists('Spatie\Activitylog\ActivitylogServiceProvider')) {
+                activity()
+                    ->performedOn($purchaseOrder)
+                    ->causedBy(Auth::user())
+                    ->withProperties([
+                        'status' => $purchaseOrder->status->value,
+                        'po_number' => $purchaseOrder->po_number
+                    ])
+                    ->log($description);
+            }
+        } catch (\Exception $e) {
+            Log::warning('Activity log not available: ' . $e->getMessage());
+        }
     }
 }
