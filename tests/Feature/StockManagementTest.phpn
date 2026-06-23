@@ -1,0 +1,340 @@
+<?php
+
+namespace Tests\Feature;
+
+use Tests\TestCase;
+use App\Models\User;
+use App\Models\Product;
+use App\Models\Warehouse;
+use App\Models\WarehouseStock;
+use App\Models\StockMovement;
+use App\Services\StockService;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+
+class StockManagementTest extends TestCase
+{
+    use RefreshDatabase;
+
+    protected $user;
+    protected $stockService;
+    protected $product;
+    protected $warehouse;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        
+        $this->seed(\Database\Seeders\RolesAndPermissionsSeeder::class);
+        
+        $this->user = User::factory()->create();
+        $this->user->assignRole('Admin');
+        $this->actingAs($this->user);
+        
+        $this->stockService = app(StockService::class);
+        
+        $this->product = Product::factory()->create([
+            'cost_price' => 100.00,
+            'reorder_level' => 10
+        ]);
+        $this->warehouse = Warehouse::factory()->create();
+    }
+
+    /** @test */
+    public function can_add_stock_to_warehouse()
+    {
+        $result = $this->stockService->adjust(
+            $this->product,
+            $this->warehouse,
+            'in',
+            10,
+            'Initial stock in'
+        );
+        
+        $this->assertDatabaseHas('warehouse_stock', [
+            'product_id' => $this->product->id,
+            'warehouse_id' => $this->warehouse->id,
+            'quantity' => 10
+        ]);
+        
+        $this->assertDatabaseHas('stock_movements', [
+            'product_id' => $this->product->id,
+            'warehouse_id' => $this->warehouse->id,
+            'type' => 'in',
+            'quantity' => 10,
+            'balance_after' => 10,
+            'notes' => 'Initial stock in'
+        ]);
+    }
+
+    /** @test */
+    public function can_remove_stock_from_warehouse()
+    {
+        // First add stock
+        $this->stockService->adjust(
+            $this->product,
+            $this->warehouse,
+            'in',
+            10,
+            'Initial stock in'
+        );
+        
+        // Then remove stock
+        $result = $this->stockService->adjust(
+            $this->product,
+            $this->warehouse,
+            'out',
+            5,
+            'Stock out for sale'
+        );
+        
+        $this->assertDatabaseHas('warehouse_stock', [
+            'product_id' => $this->product->id,
+            'warehouse_id' => $this->warehouse->id,
+            'quantity' => 5
+        ]);
+        
+        $this->assertDatabaseHas('stock_movements', [
+            'product_id' => $this->product->id,
+            'warehouse_id' => $this->warehouse->id,
+            'type' => 'out',
+            'quantity' => 5,
+            'balance_after' => 5,
+            'notes' => 'Stock out for sale'
+        ]);
+    }
+
+    /** @test */
+    public function stock_quantity_cannot_go_negative()
+    {
+        // Try to remove stock without having any
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage('Stock quantity cannot be negative.');
+        
+        $this->stockService->adjust(
+            $this->product,
+            $this->warehouse,
+            'out',
+            5,
+            'Try to remove non-existent stock'
+        );
+    }
+
+    /** @test */
+    public function can_adjust_stock_to_specific_quantity()
+    {
+        // First add some stock
+        $this->stockService->adjust(
+            $this->product,
+            $this->warehouse,
+            'in',
+            20,
+            'Initial stock in'
+        );
+        
+        // Then adjust to a specific quantity
+        $result = $this->stockService->adjust(
+            $this->product,
+            $this->warehouse,
+            'adjustment',
+            15,
+            'Adjust to 15 units'
+        );
+        
+        $this->assertDatabaseHas('warehouse_stock', [
+            'product_id' => $this->product->id,
+            'warehouse_id' => $this->warehouse->id,
+            'quantity' => 15
+        ]);
+        
+        $this->assertDatabaseHas('stock_movements', [
+            'product_id' => $this->product->id,
+            'warehouse_id' => $this->warehouse->id,
+            'type' => 'adjustment',
+            'quantity' => 15,
+            'balance_after' => 15,
+            'notes' => 'Adjust to 15 units'
+        ]);
+    }
+
+    /** @test */
+    public function adjustment_quantity_cannot_be_negative()
+    {
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage('Stock quantity cannot be negative.');
+        
+        $this->stockService->adjust(
+            $this->product,
+            $this->warehouse,
+            'adjustment',
+            -5,
+            'Negative adjustment'
+        );
+    }
+
+    /** @test */
+    public function can_get_low_stock_products()
+    {
+        // Create a product with low stock
+        $lowStockProduct = Product::factory()->create([
+            'reorder_level' => 10,
+            'name' => 'Low Stock Product'
+        ]);
+        
+        // Add stock below reorder level
+        $this->stockService->adjust(
+            $lowStockProduct,
+            $this->warehouse,
+            'in',
+            5,
+            'Low stock'
+        );
+        
+        // Create a product with sufficient stock
+        $sufficientStockProduct = Product::factory()->create([
+            'reorder_level' => 10,
+            'name' => 'Sufficient Stock Product'
+        ]);
+        
+        $this->stockService->adjust(
+            $sufficientStockProduct,
+            $this->warehouse,
+            'in',
+            20,
+            'Sufficient stock'
+        );
+        
+        $lowStockProducts = $this->stockService->getLowStockProducts();
+        
+        $this->assertEquals(1, $lowStockProducts->count());
+        $this->assertEquals('Low Stock Product', $lowStockProducts->first()->name);
+    }
+
+    /** @test */
+    public function can_get_warehouse_summary()
+    {
+        // Add multiple products to warehouse
+        $product2 = Product::factory()->create(['cost_price' => 50.00]);
+        $product3 = Product::factory()->create(['cost_price' => 200.00]);
+        
+        $this->stockService->adjust($this->product, $this->warehouse, 'in', 10, 'Stock 1');
+        $this->stockService->adjust($product2, $this->warehouse, 'in', 5, 'Stock 2');
+        $this->stockService->adjust($product3, $this->warehouse, 'in', 2, 'Stock 3');
+        
+        $summary = $this->stockService->getWarehouseSummary($this->warehouse);
+        
+        $this->assertEquals(3, $summary['product_count']);
+        $this->assertEquals(17, $summary['total_units']);
+        
+        $expectedValue = (10 * 100) + (5 * 50) + (2 * 200); // 1000 + 250 + 400 = 1650
+        $this->assertEquals($expectedValue, $summary['stock_value']);
+    }
+
+    /** @test */
+    public function can_get_total_stock_value()
+    {
+        // Add stock across multiple warehouses
+        $warehouse2 = Warehouse::factory()->create(['name' => 'Warehouse 2']);
+        
+        $this->stockService->adjust($this->product, $this->warehouse, 'in', 10, 'Stock WH1');
+        $this->stockService->adjust($this->product, $warehouse2, 'in', 5, 'Stock WH2');
+        
+        $totalValue = $this->stockService->getTotalStockValue();
+        
+        // 15 units * $100 = $1500
+        $this->assertEquals(1500, $totalValue);
+    }
+
+    /** @test */
+    public function stock_movement_is_logged_with_user_info()
+    {
+        $this->stockService->adjust(
+            $this->product,
+            $this->warehouse,
+            'in',
+            10,
+            'Test stock in'
+        );
+        
+        $movement = StockMovement::where('product_id', $this->product->id)
+            ->where('warehouse_id', $this->warehouse->id)
+            ->first();
+        
+        $this->assertEquals($this->user->id, $movement->created_by);
+        $this->assertEquals('Test stock in', $movement->notes);
+        $this->assertEquals('in', $movement->type);
+        $this->assertEquals(10, $movement->quantity);
+        $this->assertEquals(10, $movement->balance_after);
+    }
+
+    /** @test */
+    public function stock_adjustment_is_logged_in_activity_log()
+    {
+        $this->stockService->adjust(
+            $this->product,
+            $this->warehouse,
+            'in',
+            10,
+            'Test stock in'
+        );
+        
+        $this->assertDatabaseHas('activity_log', [
+            'subject_type' => WarehouseStock::class,
+            'causer_type' => User::class,
+            'causer_id' => $this->user->id,
+            'description' => 'Manual stock adjustment'
+        ]);
+    }
+
+    /** @test */
+    public function can_get_stock_by_product()
+    {
+        $product = Product::factory()->create();
+        $warehouse1 = Warehouse::factory()->create();
+        $warehouse2 = Warehouse::factory()->create();
+        
+        $this->stockService->adjust($product, $warehouse1, 'in', 10, 'Stock WH1');
+        $this->stockService->adjust($product, $warehouse2, 'in', 5, 'Stock WH2');
+        
+        $stocks = $product->warehouseStocks()->with('warehouse')->get();
+        
+        $this->assertEquals(2, $stocks->count());
+        $this->assertEquals(10, $stocks->where('warehouse_id', $warehouse1->id)->first()->quantity);
+        $this->assertEquals(5, $stocks->where('warehouse_id', $warehouse2->id)->first()->quantity);
+    }
+
+    /** @test */
+    public function can_get_stock_by_warehouse()
+    {
+        $product1 = Product::factory()->create();
+        $product2 = Product::factory()->create();
+        
+        $this->stockService->adjust($product1, $this->warehouse, 'in', 10, 'Product 1');
+        $this->stockService->adjust($product2, $this->warehouse, 'in', 20, 'Product 2');
+        
+        $stocks = $this->warehouse->stocks()->with('product')->get();
+        
+        $this->assertEquals(2, $stocks->count());
+        $this->assertEquals(10, $stocks->where('product_id', $product1->id)->first()->quantity);
+        $this->assertEquals(20, $stocks->where('product_id', $product2->id)->first()->quantity);
+    }
+
+    /** @test */
+    public function stock_movement_has_polymorphic_reference()
+    {
+        $this->stockService->adjust(
+            $this->product,
+            $this->warehouse,
+            'in',
+            10,
+            'Test stock in'
+        );
+        
+        $movement = StockMovement::first();
+        
+        $this->assertEquals('manual', $movement->reference_type);
+        $this->assertNull($movement->reference_id);
+        
+        // Test with purchase order reference (covered in PurchaseOrderWorkflowTest)
+        // This ensures the polymorphic relationship works
+    }
+}
